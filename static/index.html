@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Expense Agent</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1b1f24; --muted: #6b7280;
+    --border: #e3e6ea; --user: #2563eb; --user-text: #ffffff; --agent: #eef0f3;
+    --warn-bg: #fff7e6; --warn-border: #f5c26b; --err-bg: #fdecec; --err-text: #b42318;
+    --ok: #16a34a; --chip: #e8ebf0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --panel: #171a21; --text: #e6e8eb; --muted: #9aa3af;
+      --border: #2a2f3a; --user: #3b82f6; --agent: #222733;
+      --warn-bg: #2b2412; --warn-border: #8a6a1f; --err-bg: #2c1517; --err-text: #ff8a80;
+      --chip: #2a2f3a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; justify-content: center;
+  }
+  .app {
+    width: 100%; max-width: 760px; height: 100%;
+    display: flex; flex-direction: column;
+    background: var(--panel); border-left: 1px solid var(--border); border-right: 1px solid var(--border);
+  }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header small { color: var(--muted); margin-left: 8px; font-weight: 400; }
+  button {
+    font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--panel); color: var(--text); padding: 6px 12px;
+  }
+  button:hover:not(:disabled) { border-color: var(--user); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.primary { background: var(--user); color: var(--user-text); border-color: var(--user); }
+  button.danger { color: var(--err-text); }
+
+  #log { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { max-width: 85%; padding: 9px 13px; border-radius: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg.user { align-self: flex-end; background: var(--user); color: var(--user-text); border-bottom-right-radius: 4px; }
+  .msg.agent { align-self: flex-start; background: var(--agent); border-bottom-left-radius: 4px; }
+  .msg.error { align-self: flex-start; background: var(--err-bg); color: var(--err-text); }
+  .tools { align-self: flex-start; display: flex; flex-wrap: wrap; gap: 6px; margin-top: -6px; max-width: 85%; }
+  .chip {
+    background: var(--chip); color: var(--muted); border-radius: 999px; padding: 2px 10px;
+    font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere;
+  }
+  .pending {
+    align-self: flex-start; max-width: 85%; padding: 12px 14px; border-radius: 12px;
+    background: var(--warn-bg); border: 1px solid var(--warn-border);
+  }
+  .pending .desc { font-weight: 600; margin-bottom: 10px; }
+  .pending .row { display: flex; gap: 8px; }
+  .pending .done { color: var(--muted); font-size: 13px; margin-top: 4px; }
+
+  .hints { margin: auto; text-align: center; color: var(--muted); }
+  .hints h2 { color: var(--text); font-size: 18px; margin: 0 0 6px; }
+  .hints .chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 14px; }
+  .hints button { border-radius: 999px; font-size: 14px; }
+
+  .typing { align-self: flex-start; color: var(--muted); font-size: 13px; }
+  .typing::after { content: "…"; animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: .2; } }
+
+  form { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); }
+  textarea {
+    flex: 1; resize: none; font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; max-height: 140px;
+  }
+  textarea:focus { outline: 2px solid var(--user); outline-offset: -1px; }
+  @media (max-width: 800px) { .app { border: 0; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>Expense Agent<small id="status"></small></h1>
+    <button id="reset" type="button">New chat</button>
+  </header>
+  <div id="log"></div>
+  <form id="form">
+    <textarea id="input" rows="1" placeholder="e.g. Add 250 for lunch today" autofocus></textarea>
+    <button id="send" class="primary" type="submit">Send</button>
+  </form>
+</div>
+
+<script>
+const log = document.getElementById('log');
+const input = document.getElementById('input');
+const form = document.getElementById('form');
+const sendBtn = document.getElementById('send');
+const resetBtn = document.getElementById('reset');
+
+const EXAMPLES = [
+  'Add 250 for lunch today',
+  'Show my expenses from the last 7 days',
+  'How much did I spend on food this week?',
+  'Delete the lunch expense',
+];
+
+let sessionId = null;
+let busy = false;
+let typingEl = null;
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;   // textContent only: model output is never parsed as HTML
+  return n;
+}
+
+function scrollDown() { log.scrollTop = log.scrollHeight; }
+
+function clearHints() {
+  const h = log.querySelector('.hints');
+  if (h) h.remove();
+}
+
+function showHints() {
+  const box = el('div', 'hints');
+  box.append(el('h2', null, 'What did you spend?'), el('div', null, 'Add, list, total, update or delete expenses in plain English.'));
+  const chips = el('div', 'chips');
+  for (const ex of EXAMPLES) {
+    const b = el('button', null, ex);
+    b.type = 'button';
+    b.addEventListener('click', () => { input.value = ex; submit(); });
+    chips.append(b);
+  }
+  box.append(chips);
+  log.append(box);
+}
+
+function addMsg(role, text) {
+  clearHints();
+  const m = el('div', 'msg ' + role, text);
+  log.append(m);
+  scrollDown();
+  return m;
+}
+
+function addTools(calls) {
+  if (!calls || !calls.length) return;
+  const box = el('div', 'tools');
+  for (const c of calls) {
+    const args = Object.entries(c.args || {}).map(([k, v]) => k + '=' + JSON.stringify(v)).join(', ');
+    box.append(el('span', 'chip', c.tool + '(' + args + ')'));
+  }
+  log.append(box);
+}
+
+function setBusy(b) {
+  busy = b;
+  sendBtn.disabled = b;
+  input.disabled = b;
+  if (b) {
+    typingEl = el('div', 'typing', 'Thinking');
+    log.append(typingEl);
+    scrollDown();
+  } else if (typingEl) {
+    typingEl.remove();
+    typingEl = null;
+    input.focus();
+  }
+}
+
+async function post(path, body) {
+  const r = await fetch(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  let data = null;
+  try { data = await r.json(); } catch (_) {}
+  if (!r.ok) {
+    const d = data && data.detail;
+    const msg = typeof d === 'string' ? d
+      : Array.isArray(d) ? d.map(x => x.msg).join('; ')
+      : 'HTTP ' + r.status;
+    throw new Error(msg);
+  }
+  return data;
+}
+
+function addPending(p) {
+  const card = el('div', 'pending');
+  card.append(el('div', 'desc', p.description || ('Confirm ' + p.tool)));
+  const row = el('div', 'row');
+  const yes = el('button', 'primary', 'Yes, do it');
+  const no = el('button', 'danger', 'Cancel');
+  yes.type = no.type = 'button';
+  row.append(yes, no);
+  card.append(row);
+  log.append(card);
+  scrollDown();
+
+  async function decide(approve) {
+    if (busy) return;
+    yes.disabled = no.disabled = true;
+    row.replaceWith(el('div', 'done', approve ? 'Approved' : 'Cancelled'));
+    setBusy(true);
+    try {
+      render(await post('/confirm', { session_id: sessionId, approve }));
+    } catch (e) {
+      addMsg('error', e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  yes.addEventListener('click', () => decide(true));
+  no.addEventListener('click', () => decide(false));
+}
+
+function render(data) {
+  sessionId = data.session_id;
+  addMsg('agent', data.reply || '(no reply)');
+  addTools(data.tool_calls);
+  if (data.pending) addPending(data.pending);
+  scrollDown();
+}
+
+async function submit() {
+  const text = input.value.trim();
+  if (!text || busy) return;
+  input.value = '';
+  autosize();
+  addMsg('user', text);
+  setBusy(true);
+  try {
+    render(await post('/chat', { session_id: sessionId, message: text }));
+  } catch (e) {
+    addMsg('error', e.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
+function autosize() {
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 140) + 'px';
+}
+
+form.addEventListener('submit', (e) => { e.preventDefault(); submit(); });
+input.addEventListener('input', autosize);
+input.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); }
+});
+resetBtn.addEventListener('click', () => {
+  if (busy) return;
+  sessionId = null;
+  log.replaceChildren();
+  showHints();
+  input.focus();
+});
+
+fetch('/health').then(r => r.ok ? (document.getElementById('status').textContent = 'online') : 0).catch(() => {});
+showHints();
+</script>
+</body>
+</html>
