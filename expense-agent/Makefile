@@ -3,7 +3,7 @@ PIP  := .venv/bin/pip
 PORT ?= 8000
 
 .DEFAULT_GOAL := help
-.PHONY: help setup chat verbose web dev test models db clean
+.PHONY: help setup chat verbose web dev test test-offline models db clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  make %-9s %s\n", $$1, $$2}'
@@ -34,6 +34,9 @@ dev: .venv/.installed .env ## Web chat with auto-reload on code changes
 
 test: .venv/.installed .env ## Run the 10 live-model test cases (TEST_RUNS=3 make test)
 	$(PY) tests.py
+
+test-offline: .venv/.installed ## Run the offline tests (fake model, no API calls)
+	$(PY) tests_offline.py
 
 models: .venv/.installed ## List free OpenRouter models that support tool calling
 	@$(PY) -c "import json,urllib.request as u; d=json.load(u.urlopen('https://openrouter.ai/api/v1/models'))['data']; [print(m['id']) for m in d if m['id'].endswith(':free') and 'tools' in (m.get('supported_parameters') or [])]"

@@ -7,7 +7,7 @@ problems with {"error": "..."} so the model can read the error and recover.
 import json
 import logging
 import math
-from datetime import datetime
+from datetime import date, datetime
 
 import db
 
@@ -21,6 +21,8 @@ NEEDS_CONFIRMATION = {"delete_expense"}
 # ---------- validators (raise ValueError with a model-readable message) ----------
 
 def _amount(v) -> float:
+    if isinstance(v, bool):
+        raise ValueError("amount must be a number")
     try:
         x = float(v)
     except (TypeError, ValueError):
@@ -56,10 +58,14 @@ def _date(v):
     if v is None:
         return None
     try:
-        datetime.strptime(v, "%Y-%m-%d")
+        # strptime accepts "2026-1-5"; re-format so stored dates always sort as text.
+        d = datetime.strptime(v, "%Y-%m-%d").date()
     except (TypeError, ValueError):
         raise ValueError("spent_on must be a date in YYYY-MM-DD format")
-    return v
+    if d > date.today():
+        # A future row would fall outside every "last N days" query and could not be found again.
+        raise ValueError("spent_on cannot be in the future")
+    return d.isoformat()
 
 
 def _days(v, default: int = 30) -> int:
@@ -75,6 +81,8 @@ def _days(v, default: int = 30) -> int:
 
 
 def _id(v) -> int:
+    if isinstance(v, bool) or (isinstance(v, float) and not v.is_integer()):
+        raise ValueError("id must be an integer")
     try:
         return int(v)
     except (TypeError, ValueError):
@@ -89,8 +97,11 @@ def add_expense(amount, category, note=None, spent_on=None):
 
 
 def list_expenses(days=30):
-    rows = db.list_expenses(_days(days))
-    return {"count": len(rows), "expenses": rows}
+    rows = db.list_expenses(_days(days), limit=db.LIST_LIMIT + 1)  # one extra row detects truncation
+    out = {"count": min(len(rows), db.LIST_LIMIT), "expenses": rows[:db.LIST_LIMIT]}
+    if len(rows) > db.LIST_LIMIT:
+        out["truncated"] = f"only the newest {db.LIST_LIMIT} expenses are shown; use a smaller days value"
+    return out
 
 
 def sum_by_category(days=30):
@@ -213,6 +224,16 @@ def execute(name: str, args: dict) -> dict:
     except Exception as e:                  # real bug or DB failure: log it, hide details
         log.exception("tool %s failed", name)
         return {"error": f"internal error ({type(e).__name__})"}
+
+
+def canonical_args(name: str, args: dict) -> dict:
+    """Args in the form the tool will actually use, so "2" and 2 count as the same request."""
+    if name in ("update_expense", "delete_expense") and "id" in args:
+        try:
+            return {**args, "id": _id(args["id"])}
+        except ValueError:
+            pass
+    return args
 
 
 def describe_action(name: str, args: dict) -> str:

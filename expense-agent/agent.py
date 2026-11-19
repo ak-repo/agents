@@ -53,11 +53,14 @@ def _get_client() -> OpenAI:
     return _client
 
 
+def _system_prompt() -> str:
+    today = date.today()
+    return SYSTEM_PROMPT.format(weekday=today.strftime("%A"), today=today.isoformat())
+
+
 def new_session() -> list:
     """Fresh conversation history containing only the system prompt."""
-    today = date.today()
-    prompt = SYSTEM_PROMPT.format(weekday=today.strftime("%A"), today=today.isoformat())
-    return [{"role": "system", "content": prompt}]
+    return [{"role": "system", "content": _system_prompt()}]
 
 
 @dataclass
@@ -103,6 +106,9 @@ def run_agent(messages: list, confirm=None, verbose: bool = False) -> AgentResul
     """
     client = _get_client()
     calls = []
+
+    if messages and messages[0].get("role") == "system":
+        messages[0]["content"] = _system_prompt()  # a long session must not keep yesterday's date
 
     for _ in range(MAX_STEPS):
         resp = client.chat.completions.create(model=MODEL, messages=messages, tools=tools.TOOL_SCHEMAS)

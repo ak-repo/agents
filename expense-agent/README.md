@@ -86,6 +86,7 @@ Other endpoints: `GET /` (web chat), `GET /health`, `GET /docs` (interactive API
 | `make web` / `make dev` | Web chat (`dev` auto-reloads) |
 | `make chat` / `make verbose` | Terminal chat (`verbose` prints tool calls) |
 | `make test` | Run the 10 live-model test cases (`TEST_RUNS=3 make test` for stability) |
+| `make test-offline` | Run the offline tests (fake model, no API calls, no quota) |
 | `make models` | List the free OpenRouter models that support tool calling |
 | `make db` | Print every row in the expenses database |
 | `make clean` | Remove caches (keeps `.venv`, `.env`, `expenses.db`) |

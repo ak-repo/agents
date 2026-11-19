@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS expenses (
 )
 """
 
+LIST_LIMIT = 100  # most rows list_expenses returns to the model
+
 # Columns that update_expense may touch. Column names are never taken from input.
 _UPDATABLE = ("amount", "category", "note", "spent_on")
 
@@ -62,7 +64,7 @@ def add_expense(amount: float, category: str, note: str | None = None,
         return _fetch(c, cur.lastrowid)
 
 
-def list_expenses(days: int, limit: int = 100) -> list[dict]:
+def list_expenses(days: int, limit: int = LIST_LIMIT) -> list[dict]:
     cutoff = (date.today() - timedelta(days=days)).isoformat()
     with get_conn() as c:
         rows = c.execute(

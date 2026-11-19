@@ -2,6 +2,7 @@
 import json
 import threading
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -25,7 +26,23 @@ class Session:
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
-SESSIONS: dict[str, Session] = {}
+MAX_SESSIONS = 500  # oldest idle sessions are dropped beyond this, so memory stays bounded
+SESSIONS: OrderedDict[str, Session] = OrderedDict()
+_sessions_lock = threading.Lock()
+
+
+def _get_session(sid: str) -> Session:
+    with _sessions_lock:
+        session = SESSIONS.get(sid)
+        if session is None:
+            session = SESSIONS[sid] = Session()
+        SESSIONS.move_to_end(sid)
+        while len(SESSIONS) > MAX_SESSIONS:
+            oldest = next(iter(SESSIONS))
+            if oldest == sid or SESSIONS[oldest].lock.locked():
+                break  # never evict the session in use
+            del SESSIONS[oldest]
+        return session
 
 
 class ChatIn(BaseModel):
@@ -39,7 +56,7 @@ class ConfirmIn(BaseModel):
 
 
 def _key(name: str, args: dict) -> str:
-    return json.dumps([name, args], sort_keys=True)
+    return json.dumps([name, tools.canonical_args(name, args)], sort_keys=True)
 
 
 def _turn(session: Session, text: str) -> dict:
@@ -48,12 +65,13 @@ def _turn(session: Session, text: str) -> dict:
         if key in session.approved:
             session.approved.discard(key)
             return "approved"
-        session.pending = {
-            "key": key,
-            "tool": name,
-            "args": args,
-            "description": tools.describe_action(name, args),
-        }
+        if session.pending is None:  # one question at a time: later calls in the same turn wait
+            session.pending = {
+                "key": key,
+                "tool": name,
+                "args": args,
+                "description": tools.describe_action(name, args),
+            }
         return "pending"
 
     checkpoint = len(session.messages)
@@ -77,7 +95,7 @@ def _turn(session: Session, text: str) -> dict:
 @app.post("/chat")
 def chat(body: ChatIn):
     sid = body.session_id or uuid.uuid4().hex
-    session = SESSIONS.setdefault(sid, Session())
+    session = _get_session(sid)
     with session.lock:
         session.pending = None  # a new message means the user moved on
         out = _turn(session, body.message)
@@ -86,7 +104,10 @@ def chat(body: ChatIn):
 
 @app.post("/confirm")
 def confirm(body: ConfirmIn):
-    session = SESSIONS.get(body.session_id)
+    with _sessions_lock:
+        session = SESSIONS.get(body.session_id)
+        if session is not None:
+            SESSIONS.move_to_end(body.session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="unknown session")
     with session.lock:
